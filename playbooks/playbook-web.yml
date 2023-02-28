@@ -1,0 +1,23 @@
+---
+- hosts: "web"
+  become: true
+  gather_facts: yes
+
+  tasks: 
+# prepeare system    
+  tasks: 
+  - name: INSTALL mc
+    yum: name=mc state=present
+
+# install nginx
+  - name: INSTALL EPEL-RELEASE REPO
+    yum: name=epel-release state=present
+
+  - name: INSTALL NGINX WEB
+    yum: name=nginx state=present
+
+  - name: START/ENABLE NGINX
+    service: 
+      name: nginx
+      state: started
+      enabled: yes
