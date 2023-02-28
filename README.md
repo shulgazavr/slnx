@@ -28,9 +28,9 @@ vagrant up
 ```
 > Примечание: Для доступа к этим файла по http, необходимо изменить им тип:
 > ```
-> chcon -v --type=httpd_sys_content_t index.html
+> chcon -v -t httpd_sys_content_t index.html
 > ```
-3. Добавление в конфигурационный файл `/etc/nginx/nginx.conf` "нестандартных" портов:
+3. Добавление в конфигурационный файл `/etc/nginx/nginx.conf` нестандартных портов:
 ```
 ...
     server {
@@ -47,7 +47,7 @@ vagrant up
     }
 ...
 ```
-4. Проверка "стандартных" портов в имеющимся типе:
+4. Проверка стандартных портов в имеющимся типе:
 ```
 # semanage port -l | grep http_port_t
 http_port_t                    tcp      80, 81, 443, 488, 8008, 8009, 8443, 9000
@@ -88,7 +88,7 @@ semodule -i nginx.pp
 
 ![image](https://user-images.githubusercontent.com/105816449/221911887-73407dc8-7619-445f-b125-71ccdafacf25.png)
 
-11. Удаление модуля и удаление "нестандартного" порта:
+11. Удаление модуля и удаление нестандартного порта:
 ```
 # semodule -r nginx
 libsemanage.semanage_direct_remove_key: Removing last nginx module (no other nginx module exists at another priority).
@@ -232,6 +232,14 @@ PS. Помимо способа, предлагаемого в методиче�
 - изменить пути к файлам на актуальные в `/etc/named.conf`;
 ```
 # sed -i "s:/etc/named/:/var/named/:g" /etc/named.conf
+```
+- поправить права доступа для перенесённых файлов:
+```
+# chown root:named /var/named/named.50.168.192.rev
+# chown root:named /var/named/named.dns.lab       
+# chown root:named /var/named/named.dns.lab.view1
+# chown root:named /var/named/named.newdns.lab
+chown -R named:named /var/named/dynamic/*
 ```
 - зарестартить named:
 ```
