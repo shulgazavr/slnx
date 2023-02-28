@@ -1,13 +1,13 @@
-# Практика с SELinux.
+# Практика с `SELinux`.
 ### Описание домашнего задания.
-1. Запустить nginx на нестандартном порту 3-мя разными способами:
-- переключатели setsebool;
+1. Запустить `nginx` на нестандартном порту 3-мя разными способами:
+- переключатели `setsebool`;
 - добавление нестандартного порта в имеющийся тип;
-- формирование и установка модуля SELinux.
+- формирование и установка модуля `SELinux`.
 
-2. Обеспечить работоспособность приложения при включенном selinux.
-- развернуть приложенный стенд https://github.com/mbfx/otus-linux-adm/tree/master/selinux_dns_problems;
-- выяснить причину неработоспособности механизма обновления зоны (см. README);
+2. Обеспечить работоспособность приложения при включенном `SELinux`.
+- развернуть приложенный [стенд](https://github.com/mbfx/otus-linux-adm/tree/master/selinux_dns_problems);
+- выяснить причину неработоспособности механизма обновления зоны (см. [README](https://github.com/mbfx/otus-linux-adm/blob/master/selinux_dns_problems/README.md));
 - предложить решение (или решения) для данной проблемы;
 - выбрать одно из решений для реализации, предварительно обосновав выбор;
 - реализовать выбранное решение и продемонстрировать его работоспособность.
@@ -149,5 +149,124 @@ setsebool -P nis_enabled off
 ```
 > Примечание: доступ по этим портам будет открыт до перезапуска сервиса `nginx`.
 
+### Обеспечить работоспособность приложения при включенном `SELinux`.
+После загрузки репозитория и запуска виртуальных машин была проверена возможность внесения изменений в зону:
+```
+$ nsupdate -k /etc/named.zonetransfer.key
+> server 192.168.50.10
+> zone ddns.lab 
+> update add www.ddns.lab. 60 A 192.168.50.15
+> send
+update failed: SERVFAIL
+```
+При просмотре логов аудита на сервере, на котором предпринималась попытка внести изменения в зону, была обноружена ошибка в контексте безопасности:
+```
+# cat /var/log/audit/audit.log | audit2why
+type=AVC msg=audit(1677616500.550:1759): avc:  denied  { create } for  pid=4692 comm="isc-worker0000" name="named.ddns.lab.view1.jnl" scontext=system_u:system_r:named_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file permissive=0
 
+	Was caused by:
+		Missing type enforcement (TE) allow rule.
 
+		You can use audit2allow to generate a loadable module to allow this access.
+```
+> Примечание: в данном выводе видно, что контекст источника `scontext=system_u:system_r:named_t:s0` не совпадает с контекстом цели `tcontext=system_u:object_r:etc_t:s0`.
+> Конкретней, ошибка в несоответствии типов источника `named_t` и цели `etc_t`. Исходя из определения типа - `атрибут объекта, который определяет, кто может
+получить к нему доступ`, можно предположить, что изменение типа цели на подходящий (т.е. дающий возможность совершать какие-либо действия) для источника, решит проблему.
+
+Проверка пути правильного расположения файлов, а главное определение правильного типа контекста этих файлов:
+```
+# semanage fcontext -l | grep named
+...
+/var/named(/.*)?                                   all files          system_u:object_r:named_zone_t:s0
+...
+```
+Результат команды позволяет сделать вывод, что необходимо изменить тип в контексте конфигурационных файлов зон с `etc_t` на `named_zone_t`, а содержимое `/etc/named.conf` указывает, что необходимые файлы находятся в каталоге `/etc/named/`:
+```
+chcon -R -t named_zone_t /etc/named
+```
+
+После этого на ВМ `client` можно проверить внесение изменений:
+```
+$ nsupdate -k /etc/named.zonetransfer.key
+> server 192.168.50.10
+> zone ddns.lab
+> update add www.ddns.lab. 60 A 192.168.50.15
+> send
+> quit
+```
+```
+$ dig www.ddns.lab
+
+; <<>> DiG 9.11.4-P2-RedHat-9.11.4-26.P2.el7_9.13 <<>> www.ddns.lab
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 57171
+;; flags: qr aa rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 1, ADDITIONAL: 2
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 4096
+;; QUESTION SECTION:
+;www.ddns.lab.			IN	A
+
+;; ANSWER SECTION:
+www.ddns.lab.		60	IN	A	192.168.50.15
+
+;; AUTHORITY SECTION:
+ddns.lab.		3600	IN	NS	ns01.dns.lab.
+
+;; ADDITIONAL SECTION:
+ns01.dns.lab.		3600	IN	A	192.168.50.10
+
+;; Query time: 0 msec
+;; SERVER: 192.168.50.10#53(192.168.50.10)
+;; WHEN: Tue Feb 28 21:18:33 UTC 2023
+;; MSG SIZE  rcvd: 96
+
+```
+
+PS. Помимо способа, предлагаемого в методическом пособии, возникла идея привести текущее расположение конфигурационных файлов в соответствии со стандартами `SELinux`. Т.е. выполнить ряд действий:
+- перенести файлы из `/etc/named/` в `/var/named/`;
+```
+# cp -r /etc/named/* /var/named/
+```
+- изменить пути к файлам на актуальные в `/etc/named.conf`;
+```
+# sed -i "s:/etc/named/:/var/named/:g" /etc/named.conf
+```
+- зарестартить named:
+```
+systemctl restart named.service
+```
+После чего можно снова проверить внесение изменений:
+```
+$ nsupdate -k /etc/named.zonetransfer.key
+> server 192.168.50.10
+> zone ddns.lab
+> update add www.ddns.lab. 60 A 192.168.50.15
+> send
+```
+```
+$ dig www.ddns.lab
+
+; <<>> DiG 9.11.4-P2-RedHat-9.11.4-26.P2.el7_9.13 <<>> www.ddns.lab
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 30313
+;; flags: qr aa rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 1, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 4096
+;; QUESTION SECTION:
+;www.ddns.lab.			IN	A
+
+;; ANSWER SECTION:
+www.ddns.lab.		60	IN	A	192.168.50.15
+
+;; AUTHORITY SECTION:
+ddns.lab.		3600	IN	NS	ns01.dns.lab.
+
+;; Query time: 0 msec
+;; SERVER: 192.168.50.10#53(192.168.50.10)
+;; WHEN: Tue Feb 28 21:38:20 UTC 2023
+;; MSG SIZE  rcvd: 80
+```
